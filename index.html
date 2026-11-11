@@ -167,7 +167,8 @@ function resultCard(r, opts) {
   c.append(head);
   var when = shortTime(r.start) + "부터" + (r.end ? " · " + shortTime(r.end) + " 중지" : (opts && opts.whatif ? "" : " · 진행 중"));
   c.append(el("div", "meta", when + " · " + (IV[p.interval] || p.interval)));
-  if (r.status === "error") { c.append(el("div", "state", "계산하지 못했습니다: " + r.message + " (잠시 후 새로고침)")); return c; }
+  if (r.status === "error") { c.append(el("div", "state", "이번 계산에서 시세를 받지 못했습니다. 다음 자동 계산(1시간 이내) 때 다시 시도합니다.")); return c; }
+  if (r.status === "pending") { c.append(el("div", "state", "방금 추가된 모의매매입니다. GitHub가 몇 분 안에 첫 계산을 합니다.")); return c; }
   if (r.status === "waiting") {
     c.append(el("div", "big", won(r.equity)));
     c.append(el("div", "state", "첫 캔들이 시작되기를 기다리는 중입니다. " + (IV[p.interval] || "") + " 기준이라 시작 후 다음 캔들부터 매매합니다."));
@@ -201,28 +202,30 @@ function resultCard(r, opts) {
   return c;
 }
 
+// 진행 중인 모의매매는 GitHub가 1시간마다(그리고 PC에서 시작·중지할 때) 계산해 둔 results.json을 읽는다.
+// 핸드폰이 업비트에 직접 요청하지 않으므로, 요청 제한에 걸릴 일이 없다.
 async function refreshRuns() {
   if (busy) return; busy = true;
-  var btn = $("refresh"); btn.disabled = true; btn.textContent = "계산 중…";
+  var btn = $("refresh"); btn.disabled = true; btn.textContent = "불러오는 중…";
   var box = $("runs");
   try {
-    var data = await getJson("runs.json");
-    var runs = data.runs.slice().sort(function (a, b) { return (a.end ? 1 : 0) - (b.end ? 1 : 0) || (a.start < b.start ? 1 : -1); });
+    var runsData = await getJson("runs.json");
+    var res = null;
+    try { res = await getJson("results.json"); } catch (e) { res = null; }
+    var byKey = {};
+    (res ? res.results : []).forEach(function (r) { byKey[r.id + "|" + r.market + "|" + r.start] = r; });
+    var runs = runsData.runs.slice().sort(function (a, b) { return (a.end ? 1 : 0) - (b.end ? 1 : 0) || (a.start < b.start ? 1 : -1); });
     if (!runs.length) { box.replaceChildren(el("p", "empty", "진행 중인 모의매매가 없습니다. PC 메뉴에서 [모의매매 시작]을 누르면 여기에 나타납니다.")); }
     else {
-      box.classList.add("loading");
-      var cards = [];
-      for (var i = 0; i < runs.length; i++) {
-        var run = runs[i], p = byId[run.id], r;
-        if (!p) continue;
-        try { r = await Engine.runLive(p, run.market, run.start, data.cash, COSTS, run.end); }
-        catch (e) { r = { id: run.id, market: run.market, start: run.start, status: "error", message: "시세를 받지 못했습니다" }; }
-        r.end = run.end; cards.push(resultCard(r));
-      }
+      var cards = runs.filter(function (run) { return byId[run.id]; }).map(function (run) {
+        var r = byKey[run.id + "|" + run.market + "|" + run.start];
+        if (!r) r = { id: run.id, market: run.market, start: run.start, status: "pending" };
+        r.end = run.end;
+        return resultCard(r);
+      });
       box.replaceChildren.apply(box, cards);
-      box.classList.remove("loading");
     }
-    var now = new Date(); $("updated").textContent = "마지막 계산 " + now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    $("updated").textContent = res ? "마지막 계산 " + shortTime(res.updated) + " · 1시간마다 자동 계산" : "첫 계산을 기다리는 중";
   } catch (e) {
     box.replaceChildren(el("p", "empty", "목록을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침을 눌러 주세요."));
   }
@@ -257,7 +260,7 @@ function setupWhatif() {
     try {
       var r = await Engine.runLive(p, cs.value, $("w-date").value + " 00:00", 1000000, COSTS, null);
       out.replaceChildren(resultCard(r, { whatif: true }));
-    } catch (e) { out.replaceChildren(el("p", "empty", "시세를 받지 못했습니다. 잠시 후 다시 눌러 주세요.")); }
+    } catch (e) { out.replaceChildren(el("p", "empty", "업비트가 잠시 요청을 막았습니다(브라우저 요청은 1분에 몇 번만 허용됩니다). 1~2분 뒤 다시 눌러 주세요.")); }
     go.disabled = false; go.textContent = "계산하기";
   });
 }
@@ -269,7 +272,7 @@ function setupWhatif() {
   loadRank();
   refreshRuns();
   $("refresh").addEventListener("click", refreshRuns);
-  setInterval(function () { if (document.visibilityState === "visible") refreshRuns(); }, 120000);
+  setInterval(function () { if (document.visibilityState === "visible") refreshRuns(); }, 300000);
   document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") refreshRuns(); });
 })();
 </script>

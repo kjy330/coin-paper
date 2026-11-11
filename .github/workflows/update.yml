@@ -1,0 +1,36 @@
+# 1시간마다(그리고 PC에서 모의매매를 시작·중지할 때) 모의매매를 다시 계산해 results.json을 갱신한다.
+# 계산 코드(py/)는 PC 프로그램과 같은 Python 코드다. 실제 주문 기능은 없다.
+name: 모의매매 계산
+on:
+  schedule:
+    - cron: "7 * * * *"      # 매시 7분 (한국시간 기준으로도 매시 7분)
+  workflow_dispatch:
+  push:
+    paths: ["runs.json", "py/**", ".github/workflows/update.yml"]
+permissions:
+  contents: write
+concurrency:
+  group: update-results
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pandas numpy requests
+      - name: 계산
+        working-directory: py
+        run: python update_results.py ../runs.json ../results.json
+      - name: 결과 올리기
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results.json
+          git diff --cached --quiet && exit 0
+          git commit -m "모의매매 결과 갱신"
+          git pull --rebase
+          git push

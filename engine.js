@@ -214,7 +214,7 @@
     var waits = [600, 1200, 2500, 4000, 6000, 9000];
     for (var k = 0; k <= waits.length; k++) {
       var gap = Date.now() - lastCall;
-      if (gap < 150) await sleep(150 - gap);  // 초당 요청 수 제한 지키기
+      if (gap < 1100) await sleep(1100 - gap);  // 브라우저 요청은 업비트가 더 엄격히 제한하므로 넉넉히 띄움
       lastCall = Date.now();
       try {
         var res = await fetch(url, { cache: "no-store" });
