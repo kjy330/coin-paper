@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>코인 모의매매 노트</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+/* 레이아웃: 한 줄 세로 흐름(핸드폰 우선). 위에서부터 진행 중인 모의매매 → 전략 순위 → 지난 날짜로 미리 계산 */
+:root {
+  --bg: #f6f5f1; --surface: #ffffff; --line: #e4e1d8; --fg: #1d1f24; --muted: #6b6f78;
+  --accent: #8a5a12; --accent-ink: #ffffff;
+  --up: #d1323f; --up-bg: #fdecee; --down: #2459c4; --down-bg: #eaf0fc; --flat-bg: #efeee9;
+  --font: "Pretendard", -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15161a; --surface: #1e2026; --line: #30333b; --fg: #eceae4; --muted: #9a9ea8;
+    --accent: #e0a64a; --accent-ink: #1b1305;
+    --up: #ff6b74; --up-bg: #3a1d21; --down: #76a2ff; --down-bg: #1b2640; --flat-bg: #262830; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15161a; --surface: #1e2026; --line: #30333b; --fg: #eceae4; --muted: #9a9ea8;
+  --accent: #e0a64a; --accent-ink: #1b1305;
+  --up: #ff6b74; --up-bg: #3a1d21; --down: #76a2ff; --down-bg: #1b2640; --flat-bg: #262830; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: calc(env(safe-area-inset-top, 0px) + 18px) calc(env(safe-area-inset-bottom, 0px) + 32px);
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 560px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+h1 { font-size: 22px; line-height: 1.25; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 13px; margin: 0; color: var(--muted); font-weight: 600; letter-spacing: 0.06em; }
+.sub { color: var(--muted); font-size: 13px; margin: 0; }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+button, select, input {
+  font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 12px; min-height: 42px;
+}
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+button:disabled { opacity: .55; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { display: grid; gap: 12px; }
+.stack { display: grid; gap: 12px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.card-title { font-weight: 700; font-size: 16px; line-height: 1.35; min-width: 0; }
+.chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--flat-bg); color: var(--muted); white-space: nowrap; }
+.big { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+.pill { display: inline-block; font-size: 14px; font-weight: 700; padding: 2px 9px; border-radius: 8px; background: var(--flat-bg); vertical-align: middle; margin-left: 6px; }
+.up { color: var(--up); } .pill.up { background: var(--up-bg); }
+.down { color: var(--down); } .pill.down { background: var(--down-bg); }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.state { font-size: 14px; padding: 9px 11px; border-radius: 10px; background: var(--flat-bg); }
+canvas.spark { width: 100%; height: 56px; display: block; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.trades { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; }
+.trades li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding-top: 6px; border-top: 1px solid var(--line); }
+.trades .when { color: var(--muted); }
+.empty { color: var(--muted); font-size: 14px; }
+
+.rank { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.rank button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; width: 100%; padding: 12px 14px; border-top: 1px solid var(--line); }
+.rank button:first-child { border-top: 0; }
+.rank button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rank .no { font-weight: 800; color: var(--muted); text-align: center; }
+.rank .name { font-weight: 600; min-width: 0; }
+.rank .verdict { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+.rank .val { text-align: right; font-weight: 700; }
+
+form.whatif { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+form.whatif label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+form.whatif .full { grid-column: 1 / -1; }
+form.whatif select, form.whatif input { width: 100%; min-width: 0; }
+footer { color: var(--muted); font-size: 12px; line-height: 1.6; }
+@media (prefers-reduced-motion: no-preference) { .card { transition: opacity .2s; } }
+.loading { opacity: .6; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>코인 모의매매 노트</h1>
+    <p class="sub">실제 주문은 나가지 않습니다. 업비트 시세로 시작일부터 지금까지 다시 계산합니다.</p>
+    <div class="bar">
+      <span class="sub" id="updated">계산 준비 중…</span>
+      <button id="refresh" type="button">새로고침</button>
+    </div>
+  </header>
+
+  <section aria-labelledby="h-runs">
+    <h2 id="h-runs">진행 중인 모의매매</h2>
+    <div class="stack" id="runs"><p class="empty">불러오는 중…</p></div>
+  </section>
+
+  <section aria-labelledby="h-rank">
+    <div class="bar"><h2 id="h-rank">유명 전략 순위</h2><span class="sub" id="rank-time"></span></div>
+    <div class="rank" id="rank"><p class="empty" style="padding:12px 14px;margin:0">순위 기록이 없습니다.</p></div>
+    <p class="sub">PC 메뉴의 [순위 매기기] 결과입니다. 전략을 누르면 아래에서 미리 계산해 볼 수 있습니다.</p>
+  </section>
+
+  <section aria-labelledby="h-whatif">
+    <h2 id="h-whatif">지난 날짜부터 했다면?</h2>
+    <form class="whatif" id="whatif">
+      <label class="full">전략<select id="w-preset"></select></label>
+      <label>코인<select id="w-coin"></select></label>
+      <label>시작 날짜<input id="w-date" type="date"></label>
+      <button class="primary full" type="submit" id="w-go">계산하기</button>
+    </form>
+    <div id="w-result"></div>
+  </section>
+
+  <footer>
+    투자 조언이 아니며, 과거와 모의 결과가 실제 수익을 보장하지 않습니다.<br>
+    새 모의매매 시작과 중지는 PC의 자동매매 메뉴에서 합니다. 상승은 빨강, 하락은 파랑으로 표시합니다.
+  </footer>
+</main>
+
+<script src="engine.js"></script>
+<script>
+"use strict";
+var COSTS = { fee: 0.0005, slippage: 0.0005 };
+var COINS = [["KRW-BTC", "비트코인"], ["KRW-ETH", "이더리움"], ["KRW-XRP", "리플"], ["KRW-SOL", "솔라나"], ["KRW-DOGE", "도지코인"]];
+var COIN = Object.fromEntries(COINS);
+var IV = { "60m": "1시간봉", "240m": "4시간봉", "1d": "일봉" };
+var presets = [], byId = {}, busy = false;
+
+function $(id) { return document.getElementById(id); }
+function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function won(x) { return Math.round(x).toLocaleString("ko-KR") + "원"; }
+function pct(x, d) { return (x >= 0 ? "+" : "") + (x * 100).toFixed(d == null ? 2 : d) + "%"; }
+function tone(x) { return x > 0.00005 ? "up" : (x < -0.00005 ? "down" : ""); }
+function shortTime(s) { return String(s).slice(5, 16).replace("-", "/"); }
+async function getJson(path) { var r = await fetch(path + "?v=" + Date.now(), { cache: "no-store" }); if (!r.ok) throw new Error(path); return r.json(); }
+
+function spark(canvas, curve, t) {
+  var dpr = window.devicePixelRatio || 1, w = canvas.clientWidth || 300, h = canvas.clientHeight || 56;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  var g = canvas.getContext("2d"); g.scale(dpr, dpr);
+  if (!curve || curve.length < 2) return;
+  var ys = curve.map(function (p) { return p[1]; }), lo = Math.min.apply(null, ys), hi = Math.max.apply(null, ys);
+  if (hi - lo < 1) { hi += 1; lo -= 1; }
+  var css = getComputedStyle(document.documentElement);
+  var col = css.getPropertyValue(t === "down" ? "--down" : (t === "up" ? "--up" : "--muted")).trim();
+  var X = function (i) { return 2 + (w - 4) * i / (curve.length - 1); }, Y = function (v) { return 4 + (h - 8) * (1 - (v - lo) / (hi - lo)); };
+  var y0 = Y(curve[0][1]);
+  g.strokeStyle = css.getPropertyValue("--line").trim(); g.setLineDash([3, 3]); g.beginPath(); g.moveTo(0, y0); g.lineTo(w, y0); g.stroke(); g.setLineDash([]);
+  g.strokeStyle = col; g.lineWidth = 1.8; g.beginPath();
+  ys.forEach(function (v, i) { if (i) g.lineTo(X(i), Y(v)); else g.moveTo(X(i), Y(v)); }); g.stroke();
+  g.fillStyle = col; g.beginPath(); g.arc(X(ys.length - 1), Y(ys[ys.length - 1]), 3, 0, 7); g.fill();
+}
+
+function resultCard(r, opts) {
+  var p = byId[r.id] || {}, c = el("article", "card");
+  var head = el("div", "card-head");
+  head.append(el("div", "card-title", p.title || r.id), el("span", "chip", COIN[r.market] || r.market));
+  c.append(head);
+  var when = shortTime(r.start) + "부터" + (r.end ? " · " + shortTime(r.end) + " 중지" : (opts && opts.whatif ? "" : " · 진행 중"));
+  c.append(el("div", "meta", when + " · " + (IV[p.interval] || p.interval)));
+  if (r.status === "error") { c.append(el("div", "state", "계산하지 못했습니다: " + r.message + " (잠시 후 새로고침)")); return c; }
+  if (r.status === "waiting") {
+    c.append(el("div", "big", won(r.equity)));
+    c.append(el("div", "state", "첫 캔들이 시작되기를 기다리는 중입니다. " + (IV[p.interval] || "") + " 기준이라 시작 후 다음 캔들부터 매매합니다."));
+    return c;
+  }
+  var big = el("div", "big", won(r.equity)); var pill = el("span", "pill " + tone(r.ret), pct(r.ret)); big.append(pill); c.append(big);
+  var meta = el("div", "meta");
+  [["그냥 보유 ", pct(r.bh_ret)], ["최대 낙폭 ", pct(r.mdd)], ["거래 ", r.trades.length + "회"], ["현재가 ", Math.round(r.last_price).toLocaleString("ko-KR")]]
+    .forEach(function (kv) { meta.append(el("span", "", kv[0] + kv[1])); });
+  c.append(meta);
+  var cv = el("canvas", "spark"); cv.setAttribute("aria-label", "평가 자산 변화 그래프"); c.append(cv);
+  requestAnimationFrame(function () { spark(cv, r.curve, tone(r.ret)); });
+  var st;
+  if (r.position) st = "보유 중 · " + shortTime(r.position.entry_time) + "에 " + Math.round(r.position.entry_price).toLocaleString("ko-KR") + "원에 삼 (지금 팔면 약 " + pct(r.position.ret) + ")";
+  else if (r.breakout_target) st = "현금 · 이번 캔들 목표가 " + Math.round(r.breakout_target).toLocaleString("ko-KR") + "원을 넘으면 매수";
+  else st = "현금 · 매수 조건을 기다리는 중";
+  if (r.pending) st += " · 다음 캔들 시작 때 " + (r.pending === "buy" ? "매수" : "매도") + " 예정";
+  c.append(el("div", "state", st));
+  var det = el("details"); det.append(el("summary", "", "거래 내역 " + r.trades.length + "회"));
+  var ul = el("ul", "trades");
+  if (!r.trades.length) ul.append(el("li", "empty", "아직 끝난 거래가 없습니다."));
+  r.trades.slice().reverse().slice(0, 60).forEach(function (t) {
+    var li = el("li");
+    li.append(el("span", "when", shortTime(t.entry_time) + " → " + shortTime(t.exit_time) + " · " + t.reason));
+    li.append(el("span", tone(t.ret), pct(t.ret)));
+    li.append(el("span", "when", Math.round(t.entry_price).toLocaleString("ko-KR") + " → " + Math.round(t.exit_price).toLocaleString("ko-KR")));
+    li.append(el("span", "when", (t.pnl >= 0 ? "+" : "") + Math.round(t.pnl).toLocaleString("ko-KR") + "원"));
+    ul.append(li);
+  });
+  det.append(ul); c.append(det);
+  return c;
+}
+
+async function refreshRuns() {
+  if (busy) return; busy = true;
+  var btn = $("refresh"); btn.disabled = true; btn.textContent = "계산 중…";
+  var box = $("runs");
+  try {
+    var data = await getJson("runs.json");
+    var runs = data.runs.slice().sort(function (a, b) { return (a.end ? 1 : 0) - (b.end ? 1 : 0) || (a.start < b.start ? 1 : -1); });
+    if (!runs.length) { box.replaceChildren(el("p", "empty", "진행 중인 모의매매가 없습니다. PC 메뉴에서 [모의매매 시작]을 누르면 여기에 나타납니다.")); }
+    else {
+      box.classList.add("loading");
+      var cards = [];
+      for (var i = 0; i < runs.length; i++) {
+        var run = runs[i], p = byId[run.id], r;
+        if (!p) continue;
+        try { r = await Engine.runLive(p, run.market, run.start, data.cash, COSTS, run.end); }
+        catch (e) { r = { id: run.id, market: run.market, start: run.start, status: "error", message: "시세를 받지 못했습니다" }; }
+        r.end = run.end; cards.push(resultCard(r));
+      }
+      box.replaceChildren.apply(box, cards);
+      box.classList.remove("loading");
+    }
+    var now = new Date(); $("updated").textContent = "마지막 계산 " + now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  } catch (e) {
+    box.replaceChildren(el("p", "empty", "목록을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침을 눌러 주세요."));
+  }
+  btn.disabled = false; btn.textContent = "새로고침"; busy = false;
+}
+
+async function loadRank() {
+  try {
+    var rec = await getJson("recommend.json"), box = $("rank");
+    $("rank-time").textContent = String(rec.time).replace("T", " ").slice(5, 16).replace("-", "/") + " 기준";
+    box.replaceChildren();
+    rec.results.forEach(function (r) {
+      var b = el("button"); b.type = "button";
+      var name = el("span", "name", (byId[r.id] || {}).title || r.title); name.append(el("span", "verdict", r["판정"] + " · 그냥 보유 " + pct(r["평균보유수익"], 1)));
+      b.append(el("span", "no", r["순위"]), name, el("span", "val " + tone(r["평균검증수익"]), pct(r["평균검증수익"], 1)));
+      b.addEventListener("click", function () { $("w-preset").value = r.id; $("whatif").scrollIntoView({ behavior: "smooth", block: "start" }); });
+      box.append(b);
+    });
+  } catch (e) { /* 순위 파일이 없으면 기본 안내 유지 */ }
+}
+
+function setupWhatif() {
+  var ps = $("w-preset"); presets.forEach(function (p) { var o = el("option", "", p.title); o.value = p.id; ps.append(o); });
+  var cs = $("w-coin"); COINS.forEach(function (c) { var o = el("option", "", c[1]); o.value = c[0]; cs.append(o); });
+  var d = new Date(Date.now() + 9 * 3600e3 - 30 * 86400e3); $("w-date").value = d.toISOString().slice(0, 10);
+  $("w-date").max = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  $("whatif").addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    var p = byId[ps.value], go = $("w-go"), out = $("w-result");
+    if (!$("w-date").value) return;
+    go.disabled = true; go.textContent = "계산 중…";
+    try {
+      var r = await Engine.runLive(p, cs.value, $("w-date").value + " 00:00", 1000000, COSTS, null);
+      out.replaceChildren(resultCard(r, { whatif: true }));
+    } catch (e) { out.replaceChildren(el("p", "empty", "시세를 받지 못했습니다. 잠시 후 다시 눌러 주세요.")); }
+    go.disabled = false; go.textContent = "계산하기";
+  });
+}
+
+(async function start() {
+  try { presets = await getJson("presets.json"); } catch (e) { presets = []; }
+  presets.forEach(function (p) { byId[p.id] = p; });
+  setupWhatif();
+  loadRank();
+  refreshRuns();
+  $("refresh").addEventListener("click", refreshRuns);
+  setInterval(function () { if (document.visibilityState === "visible") refreshRuns(); }, 120000);
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") refreshRuns(); });
+})();
+</script>
+</body>
+</html>

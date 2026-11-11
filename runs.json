@@ -1,0 +1,6 @@
+{
+  "cash": 1000000,
+  "runs": [
+    {"id": "williams_breakout", "market": "KRW-BTC", "start": "2026-11-11 11:51", "end": null}
+  ]
+}
