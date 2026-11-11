@@ -122,7 +122,9 @@ class Trader:
         self.pending = None
 
     # 2) 캔들 진행 중 (백테스트에서는 해당 캔들의 고가/저가, 모의매매에서는 현재가를 넣는다)
-    def tick(self, time, open_price: float, high: float, low: float, breakout: float | None = None):
+    def tick(self, time, open_price: float, high: float, low: float, breakout: float | None = None,
+             size: float | None = None):
+        """size: 전략이 정한 돌파 매수 비중(0~1). 없으면 위험관리의 position_size를 그대로 쓴다."""
         a, r = self.acct, self.risk
         if a.in_position and not self.entered_this_bar:
             entry = a.open_trade.entry_price
@@ -140,7 +142,8 @@ class Trader:
         if (not a.in_position and breakout is not None and breakout == breakout  # NaN 제외
                 and high >= breakout):
             price = max(open_price, breakout)
-            if a.buy(time, price, r.position_size, f"돌파가 {breakout:,.2f} 도달"):
+            frac = r.position_size if size is None or size != size else r.position_size * size
+            if a.buy(time, price, frac, f"돌파가 {breakout:,.2f} 도달"):
                 self.bars_held = 0
                 self.entered_this_bar = True
 

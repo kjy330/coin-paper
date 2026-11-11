@@ -39,13 +39,14 @@ def run_backtest(df: pd.DataFrame, strategy, initial_cash: float = 1_000_000,
         o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
         buys, sells = sig["buy"].to_numpy(), sig["sell"].to_numpy()
         brk = sig["breakout"].to_numpy(dtype=float)
+        size = sig["size"].to_numpy(dtype=float) if "size" in sig else None
         times = df.index
 
         n = len(df)
         for i in range(trade_from, n):
             t = times[i]
             trader.open_bar(t, o[i])
-            trader.tick(t, o[i], h[i], l[i], brk[i])
+            trader.tick(t, o[i], h[i], l[i], brk[i], None if size is None else size[i])
             if not (last_bar_forming and i == n - 1):
                 trader.close_bar(t, bool(buys[i]), bool(sells[i]))
             eq[i] = acct.equity(c[i])

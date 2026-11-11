@@ -7,6 +7,7 @@
   sell       : True면 '이 캔들이 끝난 시점'에 매도 신호 -> 다음 캔들 시가에 매도
   breakout   : 숫자가 있으면 '이 캔들 진행 중' 가격이 그 값에 닿는 순간 매수
                (이 값은 캔들이 시작할 때 이미 알 수 있는 정보로만 계산해야 한다)
+  size       : (선택) 돌파 매수 때 현금의 몇 %를 쓸지(0~1). 없으면 100%
 
 미래 정보를 몰래 쓰지 않도록(look-ahead 방지) 모든 신호는
 그 시점까지 확정된 데이터로만 계산한다.
@@ -223,8 +224,148 @@ class MACDCross(Strategy):
         return out
 
 
+class KangBreakout(Strategy):
+    """강환국식 변동성 돌파 (래리 윌리엄스 방법의 개선형).
+
+    1) k를 고정하지 않고, 최근 noise개 캔들의 평균 '노이즈 비율'로 정한다.
+       노이즈 비율 = 1 - |종가-시가| / (고가-저가)  (출렁임이 심할수록 1에 가까움 -> 더 신중하게 매수)
+    2) 이동평균 점수: 시가가 직전 3·5·10·20봉 평균보다 높은 개수 / 4 만큼만 산다(0이면 안 삼).
+    3) 변동성 조절: 직전 봉 변동폭이 크면 적게 산다. 비중 = target_vol / (직전 변동폭/직전 종가), 최대 1.
+    실제 매수 비중 = 이동평균 점수 × 변동성 비중. 산 다음 봉 시가에 판다.
+    """
+    name = "kang"
+    description = "강환국식 변동성 돌파: 노이즈로 k 자동 결정, 이동평균 점수와 변동성으로 매수 비중 조절"
+    hold_bars = 1
+    MAS = (3, 5, 10, 20)
+
+    def __init__(self, noise: int = 20, target_vol: float = 0.02):
+        super().__init__(noise=noise, target_vol=target_vol)
+        self.noise, self.target_vol = noise, target_vol
+
+    def signals(self, df):
+        out = self._empty(df)
+        o, h, l, c = df["open"], df["high"], df["low"], df["close"]
+        rng = h - l
+        noise_ratio = (1 - (c - o).abs() / rng).where(rng > 0)
+        k = noise_ratio.rolling(self.noise).mean().shift(1)
+        prev_range = rng.shift(1)
+        target = o + prev_range * k
+        score = sum((o > ind.sma(c, n).shift(1)).astype(float) for n in self.MAS) / len(self.MAS)
+        vol = prev_range / c.shift(1)
+        vol_w = (self.target_vol / vol.where(vol > 0)).clip(upper=1.0)
+        size = score * vol_w
+        ok = target.notna() & (size > 0)
+        out["breakout"] = target.where(ok)
+        out["size"] = size.where(ok)
+        return out
+
+
+class CrabelNR7(Strategy):
+    """토비 크라벨의 NR7 돌파.
+
+    직전 캔들의 변동폭(고가-저가)이 최근 nr개 캔들 중 가장 좁았다면(시장이 조용했다면)
+    이번 캔들에서 '시가 + 스트레치'를 뚫을 때 매수하고 다음 봉 시가에 판다.
+    스트레치 = 최근 stretch개 캔들에서 시가와 가까운 쪽 끝(고가 또는 저가)까지 거리의 평균.
+    """
+    name = "nr7"
+    description = "크라벨 NR7: 최근 N봉 중 가장 좁았던 봉 다음에, 시가+스트레치를 뚫으면 매수"
+    hold_bars = 1
+
+    def __init__(self, nr: int = 7, stretch: int = 10):
+        super().__init__(nr=nr, stretch=stretch)
+        self.nr, self.stretch = nr, stretch
+
+    def signals(self, df):
+        out = self._empty(df)
+        o, h, l = df["open"], df["high"], df["low"]
+        rng = h - l
+        narrow = (rng <= rng.rolling(self.nr).min()).shift(1, fill_value=False)
+        st = np.minimum(h - o, o - l).rolling(self.stretch).mean().shift(1)
+        target = o + st
+        out["breakout"] = target.where(narrow & target.notna())
+        return out
+
+
+class OpeningRangeBreakout(Strategy):
+    """오프닝 레인지 돌파 (ORB, 토비 크라벨).
+
+    업비트 하루가 시작되는 오전 9시부터 or_bars개 캔들(1시간봉이면 처음 1시간)의
+    최고가·최저가를 '오프닝 레인지'로 정한다.
+    그날 처음으로 그 최고가를 뚫으면 매수(하루 한 번만),
+    캔들 종가가 레인지 최저가 밑으로 내려가면 다음 봉 시가에 손절,
+    아니면 그날 마지막 캔들 다음(다음날 오전 9시 시가)에 판다.
+    """
+    name = "orb"
+    description = "오프닝 레인지 돌파: 오전 9시 첫 캔들 고가를 그날 처음 뚫으면 매수, 다음날 9시 정리"
+    DAY_START_HOUR = 9  # 업비트 일봉이 바뀌는 시각(한국시간)
+
+    def __init__(self, or_bars: int = 1):
+        super().__init__(or_bars=or_bars)
+        self.or_bars = or_bars
+
+    def signals(self, df):
+        out = self._empty(df)
+        n = len(df)
+        if n == 0:
+            return out
+        h, l, c = (df[k].to_numpy(dtype=float) for k in ("high", "low", "close"))
+        epoch = ((df.index - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)).to_numpy(dtype="int64")
+        sec = epoch - self.DAY_START_HOUR * 3600  # 오전 9시를 하루의 시작으로 (한국시간 기준 시각)
+        day = sec // 86400
+        sod = sec - day * 86400                                     # 그날 9시부터 지난 초
+        step = int(np.min(np.diff(sec))) if n > 1 else 3600         # 캔들 하나의 길이(초)
+        brk = np.full(n, np.nan)
+        or_lo = np.full(n, np.nan)
+        cur, pos, valid, done, hi, lo = None, 0, False, False, np.nan, np.nan
+        for i in range(n):
+            if day[i] != cur:
+                cur, pos, done = day[i], 0, False
+                valid = sod[i] == 0  # 9시 캔들이 없으면 그날은 쉰다
+            if valid:
+                if pos < self.or_bars:  # 오프닝 레인지 만드는 중
+                    hi = h[i] if pos == 0 else max(hi, h[i])
+                    lo = l[i] if pos == 0 else min(lo, l[i])
+                else:
+                    or_lo[i] = lo
+                    if not done:
+                        brk[i] = hi
+                        if h[i] >= hi:
+                            done = True  # 하루 한 번만 (이번 캔들에서 돌파)
+            pos += 1
+        last_of_day = (sod + step) >= 86400  # 이 캔들이 끝나면 다음날 9시
+        out["breakout"] = brk
+        out["sell"] = last_of_day | (c < or_lo)  # 그날 마지막 캔들이거나 레인지 최저가 밑으로 마감
+        return out
+
+
+class IBSReversion(Strategy):
+    """IBS(Internal Bar Strength) 역추세.
+
+    IBS = (종가-저가) / (고가-저가). 0이면 그날 최저가에 마감, 1이면 최고가에 마감.
+    IBS가 low보다 작으면(바닥 근처 마감) '내일 반등'을 노려 다음 봉 시가에 사고, 하루 뒤 시가에 판다.
+    """
+    name = "ibs"
+    description = "IBS 역추세: 캔들이 바닥 근처에서 마감하면 다음 봉에 매수, 하루 뒤 매도"
+    hold_bars = 1
+
+    def __init__(self, low: float = 0.2):
+        super().__init__(low=low)
+        self.low = low
+
+    def signals(self, df):
+        out = self._empty(df)
+        rng = df["high"] - df["low"]
+        ibs = ((df["close"] - df["low"]) / rng).where(rng > 0)
+        out["buy"] = ibs < self.low
+        return out
+
+
 STRATEGIES = {
     VolatilityBreakout.name: VolatilityBreakout,
+    KangBreakout.name: KangBreakout,
+    CrabelNR7.name: CrabelNR7,
+    OpeningRangeBreakout.name: OpeningRangeBreakout,
+    IBSReversion.name: IBSReversion,
     MACross.name: MACross,
     RSIReversal.name: RSIReversal,
     BollingerReversion.name: BollingerReversion,
@@ -236,6 +377,10 @@ STRATEGIES = {
 # 전략 비교 때 시험해 볼 기본 파라미터 조합
 DEFAULT_GRID = {
     "breakout": [dict(k=0.3), dict(k=0.5), dict(k=0.7), dict(k=0.5, ma=5)],
+    "kang": [dict(noise=20, target_vol=0.02), dict(noise=20, target_vol=0.05)],
+    "nr7": [dict(nr=7, stretch=10), dict(nr=4, stretch=10)],
+    "orb": [dict(or_bars=1), dict(or_bars=2)],
+    "ibs": [dict(low=0.2), dict(low=0.1)],
     "ma_cross": [dict(short=5, long=20), dict(short=10, long=30), dict(short=20, long=60)],
     "rsi": [dict(period=14, low=30, high=70), dict(period=14, low=25, high=60)],
     "bollinger": [dict(period=20, std=2.0), dict(period=20, std=2.5)],
@@ -248,6 +393,10 @@ DEFAULT_GRID = {
 # 메뉴 프로그램에서 보여 줄 전략 이름과 값 설명: (값 이름, 한글 설명, 기본값, 고를 수 있는 값들)
 DISPLAY_NAMES = {
     "breakout": "변동성 돌파",
+    "kang": "강환국식 변동성 돌파",
+    "nr7": "크라벨 NR7",
+    "orb": "오프닝 레인지 돌파",
+    "ibs": "IBS 역추세",
     "ma_cross": "이동평균 교차",
     "rsi": "RSI 역추세",
     "bollinger": "볼린저 밴드",
@@ -260,6 +409,20 @@ PARAM_INFO = {
     "breakout": [
         ("k", "돌파 계수 k (클수록 신중하게 매수)", 0.5, [0.3, 0.4, 0.5, 0.6, 0.7]),
         ("ma", "추세 필터: 최근 N봉 평균 위일 때만 매수 (0 = 끔)", 0, [0, 3, 5, 10, 20]),
+    ],
+    "kang": [
+        ("noise", "k를 정할 때 볼 최근 캔들 수", 20, [10, 20, 30]),
+        ("target_vol", "목표 변동성 (클수록 많이 삼)", 0.02, [0.01, 0.02, 0.05, 1.0]),
+    ],
+    "nr7": [
+        ("nr", "최근 N봉 중 가장 좁았으면 준비", 7, [4, 7]),
+        ("stretch", "스트레치 평균 기간(봉 개수)", 10, [5, 10, 20]),
+    ],
+    "orb": [
+        ("or_bars", "오전 9시부터 레인지를 만들 캔들 수", 1, [1, 2, 3]),
+    ],
+    "ibs": [
+        ("low", "IBS가 이 값보다 작으면 매수", 0.2, [0.1, 0.15, 0.2, 0.25]),
     ],
     "ma_cross": [
         ("short", "단기 평균선 기간(봉 개수)", 5, [3, 5, 10, 20]),

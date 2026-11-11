@@ -60,6 +60,13 @@
     return o;
   }
 
+  // pandas rolling(n).mean()과 같음: 창 안에 NaN이 있으면 NaN
+  function rollMean(a, n) {
+    var o = new Array(a.length).fill(NaN);
+    for (var i = n - 1; i < a.length; i++) { var s = 0; for (var j = i - n + 1; j <= i; j++) s += a[j]; o[i] = s / n; }
+    return o;
+  }
+
   // 계산 오차 수준의 차이는 '같은 값'으로 본다 (strategies.py의 gt와 같음). NaN이면 false.
   var EPS = 1e-9;
   function gt(a, b) { return (a - b) > EPS * Math.abs(b); }
@@ -75,6 +82,54 @@
         var ok = !isNaN(tgt) && (!trend || d.o[i] > trend[i]);
         out.breakout[i] = ok ? tgt : NaN;
       }
+      return out;
+    } },
+    kang: { hold: 1, fn: function (d, p) {
+      var n = d.o.length, out = empty(n), N = p.noise || 20, tv = p.target_vol == null ? 0.02 : p.target_vol, i;
+      out.size = new Array(n).fill(NaN);
+      var rng = [], noise = [];
+      for (i = 0; i < n; i++) { rng[i] = d.h[i] - d.l[i]; noise[i] = rng[i] > 0 ? 1 - Math.abs(d.c[i] - d.o[i]) / rng[i] : NaN; }
+      var kk = shift(rollMean(noise, N), 1);
+      var mas = [3, 5, 10, 20].map(function (m) { return shift(sma(d.c, m), 1); });
+      for (i = 1; i < n; i++) {
+        var tgt = d.o[i] + rng[i - 1] * kk[i];
+        var score = 0; mas.forEach(function (m) { if (d.o[i] > m[i]) score++; }); score /= mas.length;
+        var vol = rng[i - 1] / d.c[i - 1], vw = vol > 0 ? Math.min(1, tv / vol) : NaN, size = score * vw;
+        if (!isNaN(tgt) && size > 0) { out.breakout[i] = tgt; out.size[i] = size; }
+      }
+      return out;
+    } },
+    nr7: { hold: 1, fn: function (d, p) {
+      var n = d.o.length, out = empty(n), nr = p.nr || 7, sn = p.stretch || 10, i, rng = [], st0 = [];
+      for (i = 0; i < n; i++) { rng[i] = d.h[i] - d.l[i]; st0[i] = Math.min(d.h[i] - d.o[i], d.o[i] - d.l[i]); }
+      var rmin = rollExt(rng, nr, Math.min), st = shift(rollMean(st0, sn), 1);
+      for (i = 1; i < n; i++) {
+        var narrow = rng[i - 1] <= rmin[i - 1], tgt = d.o[i] + st[i];
+        if (narrow && !isNaN(tgt)) out.breakout[i] = tgt;
+      }
+      return out;
+    } },
+    orb: { hold: null, fn: function (d, p) {
+      var n = d.o.length, out = empty(n), ob = p.or_bars || 1, i, sec = [], day = [], sod = [];
+      if (!n) return out;
+      for (i = 0; i < n; i++) { sec[i] = Math.round(d.t[i] / 1000) - 9 * 3600; day[i] = Math.floor(sec[i] / 86400); sod[i] = sec[i] - day[i] * 86400; }
+      var step = 3600;
+      if (n > 1) { step = Infinity; for (i = 1; i < n; i++) step = Math.min(step, sec[i] - sec[i - 1]); }
+      var cur = null, pos = 0, valid = false, done = false, hi = NaN, lo = NaN, orLo = new Array(n).fill(NaN);
+      for (i = 0; i < n; i++) {
+        if (day[i] !== cur) { cur = day[i]; pos = 0; done = false; valid = sod[i] === 0; }
+        if (valid) {
+          if (pos < ob) { hi = pos === 0 ? d.h[i] : Math.max(hi, d.h[i]); lo = pos === 0 ? d.l[i] : Math.min(lo, d.l[i]); }
+          else { orLo[i] = lo; if (!done) { out.breakout[i] = hi; if (d.h[i] >= hi) done = true; } }
+        }
+        pos++;
+      }
+      for (i = 0; i < n; i++) out.sell[i] = (sod[i] + step) >= 86400 || d.c[i] < orLo[i];
+      return out;
+    } },
+    ibs: { hold: 1, fn: function (d, p) {
+      var n = d.o.length, out = empty(n), lo = p.low == null ? 0.2 : p.low;
+      for (var i = 0; i < n; i++) { var r = d.h[i] - d.l[i]; out.buy[i] = r > 0 && (d.c[i] - d.l[i]) / r < lo; }
       return out;
     } },
     ma_cross: { hold: null, fn: function (d, p) {
@@ -148,7 +203,7 @@
     else if (this.pending === "sell") { this.a.sell(t, o, this.expired() ? "보유기간 종료" : "매도 신호"); }
     this.pending = null;
   };
-  Trader.prototype.tick = function (t, o, h, l, brk) {
+  Trader.prototype.tick = function (t, o, h, l, brk, size) {
     var a = this.a, r = this.r;
     if (a.open && !this.entered) {
       var e = a.open.entry_price;
@@ -156,7 +211,8 @@
       if (r.take_profit > 0) { var tp = e * (1 + r.take_profit); if (h >= tp) { a.sell(t, Math.max(o, tp), "익절 " + pct1(r.take_profit)); return; } }
     }
     if (!a.open && !isNaN(brk) && h >= brk) {
-      if (a.buy(t, Math.max(o, brk), r.position_size, "돌파가 도달")) { this.held = 0; this.entered = true; }
+      var frac = (size == null || isNaN(size)) ? r.position_size : r.position_size * size;
+      if (a.buy(t, Math.max(o, brk), frac, "돌파가 도달")) { this.held = 0; this.entered = true; }
     }
   };
   Trader.prototype.closeBar = function (buy, sell) {
@@ -175,8 +231,8 @@
     for (var i = 0; i < candles.length; i++) if (candles[i].t >= startMs) { from = i; break; }
     if (from < 0) { out.status = "waiting"; out.equity = cash; out.ret = 0; out.trades = []; out.position = null; return out; }
     var n = candles.length, forming = candles[n - 1].t + step > nowMs;
-    var d = { o: [], h: [], l: [], c: [] };
-    candles.forEach(function (x) { d.o.push(x.o); d.h.push(x.h); d.l.push(x.l); d.c.push(x.c); });
+    var d = { t: [], o: [], h: [], l: [], c: [] };
+    candles.forEach(function (x) { d.t.push(x.t); d.o.push(x.o); d.h.push(x.h); d.l.push(x.l); d.c.push(x.c); });
     var strat = STRATEGIES[preset.strategy], sig = strat.fn(d, preset.params || {});
     var acct = new Account(cash, costs);
     var tr = new Trader(strat.hold, acct, { position_size: 1, stop_loss: preset.stop_loss || 0, take_profit: preset.take_profit || 0 });
@@ -184,7 +240,7 @@
     for (i = from; i < n; i++) {
       var t = fmtKst(candles[i].t);
       tr.openBar(t, d.o[i]);
-      tr.tick(t, d.o[i], d.h[i], d.l[i], sig.breakout[i]);
+      tr.tick(t, d.o[i], d.h[i], d.l[i], sig.breakout[i], sig.size ? sig.size[i] : NaN);
       if (!(forming && i === n - 1)) tr.closeBar(sig.buy[i], sig.sell[i]);
       var eq = acct.equity(d.c[i]);
       curve.push([candles[i].t, eq]);
