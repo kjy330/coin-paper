@@ -207,14 +207,21 @@
 
   // ---------- 업비트 공개 시세 받기 (API 키 불필요)
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  // 업비트는 요청이 몰리면 잠깐 거절(429)하는데, 그 응답에는 CORS 허용 헤더가 없어
+  // 브라우저에서는 '네트워크 오류'로 보인다. 그래서 오류가 나면 점점 길게 쉬었다가 다시 시도한다.
+  var lastCall = 0;
   async function getJson(url) {
-    for (var k = 0; k < 5; k++) {
+    var waits = [600, 1200, 2500, 4000, 6000, 9000];
+    for (var k = 0; k <= waits.length; k++) {
+      var gap = Date.now() - lastCall;
+      if (gap < 150) await sleep(150 - gap);  // 초당 요청 수 제한 지키기
+      lastCall = Date.now();
       try {
         var res = await fetch(url, { cache: "no-store" });
-        if (res.status === 429) { await sleep(500 * (k + 1)); continue; }
+        if (res.status === 429 || res.status >= 500) throw new Error("HTTP " + res.status);
         if (!res.ok) throw new Error("HTTP " + res.status);
         return await res.json();
-      } catch (e) { if (k === 4) throw e; await sleep(800 * (k + 1)); }
+      } catch (e) { if (k === waits.length) throw e; await sleep(waits[k]); }
     }
   }
   async function fetchSince(market, interval, sinceMs) {
@@ -229,7 +236,6 @@
       all = batch.concat(all);
       if (batch[0].t <= sinceMs || rows.length < 200) break;
       to = batch[0].t;
-      await sleep(130);
     }
     var seen = {}, out = [];
     all.sort(function (a, b) { return a.t - b.t; }).forEach(function (x) { if (!seen[x.t] && x.t >= sinceMs) { seen[x.t] = 1; out.push(x); } });
